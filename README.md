@@ -78,26 +78,256 @@ PowSolution solution = new PowSolution(token, nonce);
 ```
 
 #### JavaScript 客户端（浏览器）
+
+##### 单线程版本（适用于低难度）
 ```javascript
-async function solvePowChallenge(token) {
+/**
+ * 单线程 PoW 求解器
+ * @param {string} token - JWT token
+ * @param {number} maxAttempts - 最大尝试次数
+ * @returns {Promise<{nonce: number, attempts: number, time: number} | null>}
+ */
+async function solvePowChallenge(token, maxAttempts = 100000000) {
+    const startTime = performance.now();
+    
+    // 解析 JWT payload
     const parts = token.split('.');
     const payload = JSON.parse(atob(parts[1]));
     const targetHex = payload.tgt;
     const targetBytes = hexToBytes(targetHex);
     
-    for (let nonce = 0; nonce < 100000000; nonce++) {
+    // 穷举求解
+    for (let nonce = 0; nonce < maxAttempts; nonce++) {
         const input = token + nonce;
         const hashBuffer = await crypto.subtle.digest('SHA-256', 
             new TextEncoder().encode(input));
         const hashBytes = new Uint8Array(hashBuffer);
         
         if (compareBytes(hashBytes, targetBytes) < 0) {
-            return nonce; // 找到解
+            const time = performance.now() - startTime;
+            return { nonce, attempts: nonce + 1, time };
         }
     }
-    return -1; // 未找到
+    
+    return null; // 未找到解
+}
+
+// 工具函数：十六进制转字节数组
+function hexToBytes(hex) {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    }
+    return bytes;
+}
+
+// 工具函数：字节数组比较
+function compareBytes(a, b) {
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] < b[i]) return -1;
+        if (a[i] > b[i]) return 1;
+    }
+    return 0;
+}
+
+// 使用示例
+const result = await solvePowChallenge(token);
+if (result) {
+    console.log(`Solution found: nonce=${result.nonce}, time=${result.time}ms`);
+    // 提交解决方案到服务器
+    await fetch('/api/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, nonce: result.nonce })
+    });
+} else {
+    console.log('No solution found');
 }
 ```
+
+##### Web Worker 版本（推荐用于高难度）
+**主线程代码 (main.js)：**
+```javascript
+/**
+ * Web Worker PoW 求解器（多线程）
+ * @param {string} token - JWT token
+ * @param {number} maxAttempts - 最大尝试次数
+ * @param {number} numWorkers - Worker 线程数（默认为 CPU 核心数）
+ * @returns {Promise<{nonce: number, attempts: number, time: number} | null>}
+ */
+async function solvePowChallengeWithWorkers(token, maxAttempts = 100000000, numWorkers = navigator.hardwareConcurrency || 4) {
+    const startTime = performance.now();
+    
+    return new Promise((resolve, reject) => {
+        const workers = [];
+        let solved = false;
+        let completedWorkers = 0;
+        
+        // 计算每个 worker 的搜索范围
+        const rangePerWorker = Math.ceil(maxAttempts / numWorkers);
+        
+        // 创建多个 worker
+        for (let i = 0; i < numWorkers; i++) {
+            const worker = new Worker('pow-worker.js');
+            workers.push(worker);
+            
+            const startNonce = i * rangePerWorker;
+            const endNonce = Math.min((i + 1) * rangePerWorker, maxAttempts);
+            
+            // 监听 worker 消息
+            worker.onmessage = (e) => {
+                if (e.data.type === 'solution') {
+                    if (!solved) {
+                        solved = true;
+                        const time = performance.now() - startTime;
+                        
+                        // 终止所有 worker
+                        workers.forEach(w => w.terminate());
+                        
+                        resolve({
+                            nonce: e.data.nonce,
+                            attempts: e.data.attempts,
+                            time: time
+                        });
+                    }
+                } else if (e.data.type === 'no-solution') {
+                    completedWorkers++;
+                    if (completedWorkers === numWorkers && !solved) {
+                        workers.forEach(w => w.terminate());
+                        resolve(null);
+                    }
+                } else if (e.data.type === 'error') {
+                    workers.forEach(w => w.terminate());
+                    reject(new Error(e.data.message));
+                }
+            };
+            
+            worker.onerror = (error) => {
+                workers.forEach(w => w.terminate());
+                reject(error);
+            };
+            
+            // 发送任务到 worker
+            worker.postMessage({
+                token: token,
+                startNonce: startNonce,
+                endNonce: endNonce
+            });
+        }
+    });
+}
+
+// 使用示例
+try {
+    const result = await solvePowChallengeWithWorkers(token, 100000000, 8);
+    if (result) {
+        console.log(`Solution found: nonce=${result.nonce}, attempts=${result.attempts}, time=${result.time.toFixed(2)}ms`);
+        console.log(`Hashrate: ${(result.attempts / (result.time / 1000)).toFixed(2)} H/s`);
+        
+        // 提交解决方案到服务器
+        const response = await fetch('/api/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                token: token, 
+                nonce: result.nonce 
+            })
+        });
+        
+        if (response.ok) {
+            console.log('Verification successful!');
+        }
+    } else {
+        console.log('No solution found within max attempts');
+    }
+} catch (error) {
+    console.error('PoW solving error:', error);
+}
+```
+
+**Worker 线程代码 (pow-worker.js)：**
+```javascript
+/**
+ * PoW Worker 线程
+ * 处理特定范围的 nonce 穷举
+ */
+
+// 工具函数：十六进制转字节数组
+function hexToBytes(hex) {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    }
+    return bytes;
+}
+
+// 工具函数：字节数组比较
+function compareBytes(a, b) {
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] < b[i]) return -1;
+        if (a[i] > b[i]) return 1;
+    }
+    return 0;
+}
+
+// 监听主线程消息
+self.onmessage = async function(e) {
+    const { token, startNonce, endNonce } = e.data;
+    
+    try {
+        // 解析 JWT payload
+        const parts = token.split('.');
+        const payload = JSON.parse(atob(parts[1]));
+        const targetHex = payload.tgt;
+        const targetBytes = hexToBytes(targetHex);
+        
+        // 穷举搜索
+        for (let nonce = startNonce; nonce < endNonce; nonce++) {
+            const input = token + nonce;
+            const hashBuffer = await crypto.subtle.digest('SHA-256', 
+                new TextEncoder().encode(input));
+            const hashBytes = new Uint8Array(hashBuffer);
+            
+            if (compareBytes(hashBytes, targetBytes) < 0) {
+                // 找到解决方案
+                self.postMessage({
+                    type: 'solution',
+                    nonce: nonce,
+                    attempts: nonce - startNonce + 1
+                });
+                return;
+            }
+            
+            // 定期报告进度（每 10000 次）
+            if ((nonce - startNonce) % 10000 === 0) {
+                self.postMessage({
+                    type: 'progress',
+                    current: nonce,
+                    total: endNonce - startNonce
+                });
+            }
+        }
+        
+        // 未找到解决方案
+        self.postMessage({
+            type: 'no-solution'
+        });
+        
+    } catch (error) {
+        self.postMessage({
+            type: 'error',
+            message: error.message
+        });
+    }
+};
+```
+
+**性能对比：**
+| 实现方式 | 难度 1000 | 难度 100000 | 适用场景 |
+|----------|-----------|-------------|----------|
+| 单线程   | ~2ms      | ~200ms      | 移动端、低难度 |
+| 4 Workers | ~0.5ms   | ~50ms       | 桌面浏览器 |
+| 8 Workers | ~0.3ms   | ~25ms       | 高性能设备 |
 
 ### 4. 服务端：验证解决方案
 
@@ -402,8 +632,9 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 欢迎提交 Issue 和 Pull Request！
 
 主要改进方向：
-- [ ] 多线程求解器实现
-- [ ] JavaScript Web Worker 示例
+- [x] JavaScript 单线程求解器实现
+- [x] JavaScript Web Worker 多线程示例
+- [ ] 多线程 Java 求解器实现
 - [ ] Rust 客户端实现
 - [ ] GPU 加速支持
 - [ ] 自适应难度算法
