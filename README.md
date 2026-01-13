@@ -1,5 +1,9 @@
 # JWT PoW Challenge System
 
+[![CI/CD Pipeline](https://github.com/lihongjie0209/pow/actions/workflows/ci.yml/badge.svg)](https://github.com/lihongjie0209/pow/actions/workflows/ci.yml)
+[![Java Version](https://img.shields.io/badge/Java-8%2B-blue)](https://www.oracle.com/java/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 企业级 Proof-of-Work 防刷系统，基于 JWT 载体的精细化难度控制方案。
 
 ## 🎯 核心特性
