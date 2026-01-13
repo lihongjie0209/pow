@@ -29,6 +29,17 @@ public class PowDemo {
     private static final Logger log = LoggerFactory.getLogger(PowDemo.class);
     
     private static final String SECRET_KEY = "ThisIsAVerySecureSecretKeyWith256Bits!!";
+    
+    /**
+     * Java 8 兼容的字符串重复方法
+     */
+    private static String repeatString(String str, int count) {
+        StringBuilder sb = new StringBuilder(str.length() * count);
+        for (int i = 0; i < count; i++) {
+            sb.append(str);
+        }
+        return sb.toString();
+    }
 
     public static void main(String[] args) {
         System.out.println("╔══════════════════════════════════════════════════════════╗");
@@ -48,7 +59,7 @@ public class PowDemo {
         Scanner scanner = new Scanner(System.in);
         
         while (true) {
-            System.out.println("\n" + "=".repeat(60));
+            System.out.println("\n" + repeatString("=", 60));
             System.out.println("请选择难度级别（或输入 'q' 退出）：");
             System.out.println("  1. 简单    (Difficulty = 100,     预计 < 1ms)");
             System.out.println("  2. 中等    (Difficulty = 1,000,   预计 ~10ms)");
@@ -97,9 +108,9 @@ public class PowDemo {
                 continue;
             }
             
-            System.out.println("\n" + "-".repeat(60));
+            System.out.println("\n" + repeatString("-", 60));
             System.out.println("🚀 开始挑战流程 [Difficulty = " + difficulty + "]");
-            System.out.println("-".repeat(60));
+            System.out.println(repeatString("-", 60));
             
             try {
                 // === 阶段 1: 服务端生成挑战 ===
